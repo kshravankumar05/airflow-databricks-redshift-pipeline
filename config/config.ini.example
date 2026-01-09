@@ -1,0 +1,14 @@
+[servicenow_change_request]
+
+# Example configuration file for ServiceNow Change Request ETL Pipeline
+# Portfolio/Demo Version - All values are examples
+
+# Output columns to extract from CSV
+output_cols=additional_assignee_list, app_ci, location, cmdb_ci, assigned_to, assignment_group, cab_date, u_cab_authorizer, cab_delegate, cab_recommendation, comments_and_work_notes, u_configuration_item_type, conflict_last_run, conflict_status, state, u_reason_for_emergency, u_end_user_impact, business_service, u_source_incident, cab_required, u_conflict_accepted, knowledge, is_pre_release_test_required, active, production_system, u_pir_required, unauthorized, made_sla, u_redundancy_failover_explanation, u_knowledge_of_impacted_ci, u_outage_summary, parent, u_planned_outage_time, u_project, test_plan, u_testing_result, u_source_problem, sys_created_by, sys_created_on, approval_set, approval_history, approval, backout_plan, category, closed_by, closed_at, comments, u_change_conflict, description, u_lead_time, requested_by, u_emergency_justification, end_date, change_plan, u_fallback_minutes, impact, u_change_scale, u_impact_description, u_impacted_location, u_implementation_group, u_implementation_plan, u_implementation_result, u_duration_of_implementation, justification, number, opened_by, opened_at, u_pir_date, u_pir_owner, u_reason_for_pir, u_pir_result, priority, close_code, close_notes, review_comments, risk, risk_impact_analysis, risk_value, short_description, u_source_of_change, start_date, type, u_validation_plan, work_end, work_start, u_standard_change_template, std_change_producer_version, sys_id, sys_tags, work_notes, company, ucloud_ingestion_date, watch_list
+
+# Drop duplicate records flag (Y/N)
+is_drop_duplicate=Y
+
+# Column renaming mapping (JSON format)
+renamed_cols={"cmdb_ci.ref_cmdb_ci_service.u_application_key":"app_ci","u_testing_of_requested_change":"is_pre_release_test_required"}
+

@@ -1,0 +1,261 @@
+# ============================================================================
+# ServiceNow Change Request ETL Pipeline - Airflow DAG Configuration
+# PORTFOLIO VERSION - All sensitive data replaced with dummy values
+# ============================================================================
+
+default:
+  pipeline_id: TBD
+  default_args:
+    owner: 'data_engineer'
+    start_date: 2024-01-01
+    timezone: UTC
+    retries: 1
+    retries_delay_sec: 180
+  max_active_runs: 1
+  dagrun_timeout_sec: 259200
+  default_view: 'graph'
+  orientation: 'LR'
+  schedule_interval: None
+  catchup: False
+  depends_on_past : False
+  environment: demo
+  project_alias: demo_project
+  project_name: servicenow_etl
+  portfolio_name: data_engineering
+  domain_name: change_management
+  on_failure_callback_name: on_failure
+  on_failure_callback_file: /usr/local/airflow/dags/utils/common_utils.py
+  on_success_callback_name: on_success
+  on_success_callback_file: /usr/local/airflow/dags/utils/common_utils.py
+
+servicenow_change_request:
+  default_args:
+    owner: 'airflow'
+    start_date: 2024-01-01
+  description: 'ServiceNow Change Request ETL Pipeline - Portfolio Demo'
+  schedule_interval: None
+  catchup: False
+  depends_on_past: False
+  on_failure_callback_name: on_failure
+  on_failure_callback_file: /usr/local/airflow/dags/utils/common_utils.py
+  tags:
+  - servicenow
+  - etl
+  - databricks
+  - redshift
+  - change_management
+  - portfolio_demo
+  tasks:
+    get_feed_date:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        domain: change_management
+        load_name: servicenow_change_request
+        increase_feed_date_by: 1_day
+      python_callable_name: get_feed_date
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies: []
+    
+    insert_run_control:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          --RUN_DATE: "{{ params.run_date }}"
+          --FEED_DATE: "{{ params.feed_date }}" 
+          --LOAD_DETAIL: "{{ params.load_detail }}"
+      python_callable_name: run_audit_runner_job
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies: 
+         - get_feed_date
+    
+    s3_sensor_major_change:
+      operator: airflow.sensors.s3_key_sensor.S3KeySensor
+      bucket_key: servicenow/change_request/*.csv
+      wildcard_match: True
+      bucket_name: demo-etl-{{ var.value.environment }}-s3-raw
+      aws_conn_id: aws_default
+      poke_interval: 1
+      timeout: 2
+      dependencies:
+        - insert_run_control 
+
+    check_if_empty_file:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        s3_input_location: s3://{{var.value.raw_bucket_name}}/servicenow/change_request/*.csv
+        stop_process_for_empty_file: yes
+      python_callable_name: empty_file_or_zero_record_check
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies: 
+        - s3_sensor_major_change   
+    
+    major_change_raw_csv_parser:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          s3_input_path: s3://{{var.value.raw_bucket_name}}/servicenow/change_request/*.csv
+          s3_output_path: s3://{{ var.value.staging_bucket_name }}/servicenow/change_request/
+          s3_temp_path: s3://{{ var.value.temp_bucket_name }}/servicenow/change_request/
+          pipeline_name: servicenow_change_request
+          RUN_DATE: "{{ params.run_date }}"
+          CONFIG_INI_BUCKET: "{{ var.value.config_bucket_name }}"
+          CONFIG_INI_PATH: config/servicenow/change_request/config.ini
+          CATALOG: "{{ var.value.databricks_catalog }}"
+          SCHEMA : "{{ var.value.databricks_schema }}"
+        notebook_path: /Workspace/Users/demo@example.com/databricks_csv_to_parquet_notebook
+        cluster_mode: "serverless" 
+        databricks_conn_id: "{{ var.value.databricks_connection }}" 
+        budget_policy_id: "{{ var.value.budget_policy }}" 
+      python_callable_name: run_databricks_notebook 
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils_etl.py 
+      dependencies:
+        - check_if_empty_file
+        
+    feed_id_sequence_major_change:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        feed_id: 'DEMO001'
+      python_callable_name: get_meta_sequence_no
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies:
+        - major_change_raw_csv_parser
+        
+    meta_file_creation_major_change:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          AUDIT_FEED_ID: 'DEMO001'
+          TABLE_NAME: servicenow_change_request
+          META_FILE_LOCATION: s3://{{ var.value.staging_bucket_name }}/servicenow/change_request/
+          AUDIT_DATABASE_NAME: metadata_db
+          FILE_LOCATION: s3://{{ var.value.staging_bucket_name }}/servicenow/change_request/
+          SECRET_MANAGER: demo-secret-manager
+          AUDIT_TABLE_NAME: ingestion_job_history
+          FILE_FORMAT: parquet
+        job_name: demo-meta-file-creation
+      python_callable_name: run_databricks_job
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils.py
+      dependencies:
+        - feed_id_sequence_major_change
+    
+    poll_major_change:
+      operator: airflow.sensors.sql_sensor.SqlSensor
+      conn_id: postgres_default
+      timeout: 1800
+      poke_interval: 240
+      sql: SELECT * FROM metadata_db.ingestion_job_history where feed_id = 'DEMO001' and job_status = 'SUCCEEDED' and file_sequence_no = '{{task_instance.xcom_pull(task_ids="feed_id_sequence_major_change",key="sequence_no")}}'
+      dependencies:
+        - meta_file_creation_major_change    
+
+    postprocessor_scd1:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          CATALOG: demo_catalog
+          SOURCE_SCHEMA: staging_change_management
+          SOURCE_TABLE: servicenow_change_request
+          TARGET_SCHEMA: change_management_tbl
+          TARGET_TABLE: servicenow_change_request
+          IDENTITY_COLUMN: system_record_id
+        notebook_path: /Workspace/Users/demo@example.com/databricks_scd1_notebook
+        cluster_mode: "serverless" 
+        databricks_conn_id: "{{ var.value.databricks_connection }}" 
+        budget_policy_id: "{{ var.value.budget_policy }}" 
+      python_callable_name: run_databricks_notebook 
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils_etl.py 
+      dependencies:
+        - poll_major_change
+
+    databricks_export_runner:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          ENVIRONMENT: "{{ var.value.environment }}"
+          LOAD_NAME: servicenow_change_request
+          S3_PATH_LOCATION: s3://{{ var.value.temp_bucket_name }}/servicenow/change_request/
+          FILTER_CONDITION: "'insert','update_postimage'"          
+        notebook_path: /Workspace/Users/demo@example.com/databricks_export_notebook
+        cluster_mode: "serverless"
+        databricks_conn_id: "{{ var.value.databricks_connection }}" 
+        budget_policy_id: "{{ var.value.budget_policy }}"
+      python_callable_name: run_databricks_notebook
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils_etl.py
+      dependencies:
+        - postprocessor_scd1    
+
+    redshift_sync: 
+      operator: airflow.operators.python_operator.PythonOperator 
+      job_params: 
+        args: 
+          REDSHIFT_SQL_SCRIPT_BUCKET_NAME: '{{ var.value.config_bucket_name}}' 
+          REDSHIFT_SQL_SCRIPT_FILE_PATH: sql/redshift/major_change_rs_sync.sql 
+          RS_DATABASE: "{{ var.value.redshift_db_name }}" 
+          LOG_BUCKET_PATH: "airflow/{{ params.dag_id }}/redshift_sync/servicenow_change_request/" 
+          SECRET_ID: demo-redshift-secret
+          LOAD_RUN_DATE: "'{{ params.run_date }}'" 
+          S3_PATH_LOCATION: s3://{{ var.value.temp_bucket_name }}/servicenow/change_request/
+          IAM_ROLE_ARN: "{{ var.value.redshift_iam_role_arn }}" 
+          ENVIRONMENT: "{{ var.value.environment }}" 
+          LOAD_NAME: servicenow_change_request
+          LOG_BUCKET_NAME: "{{ var.value.logs_bucket_name }}" 
+        notebook_path: /Workspace/Users/demo@example.com/databricks_redshift_sync_notebook
+        existing_cluster_id: "{{ var.value.databricks_cluster_id }}" 
+        databricks_conn_id: "{{ var.value.databricks_connection }}" 
+        budget_policy_id: "{{ var.value.budget_policy }}"
+      python_callable_name: run_databricks_notebook 
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils_etl.py  
+      dependencies: 
+        - databricks_export_runner
+    
+    check_redshift_sync_status: 
+      operator: airflow.operators.python_operator.PythonOperator 
+      job_params: 
+        args: 
+          ENVIRONMENT: "{{ var.value.environment }}"
+          LOAD_NAME: servicenow_change_request
+        notebook_path: /Workspace/Users/demo@example.com/databricks_sync_status_notebook
+        cluster_mode: "serverless" 
+        databricks_conn_id: "{{ var.value.databricks_connection }}" 
+        budget_policy_id: "{{ var.value.budget_policy }}" 
+      python_callable_name: run_databricks_notebook 
+      python_callable_file: /usr/local/airflow/dags/dag_factory/utils_etl.py 
+      dependencies: 
+        - redshift_sync
+    
+    raw_file_mover: 
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        file_to_move:
+          - source_bucket_name: "{{ var.value.raw_bucket_name }}"
+            destination_bucket_name: "{{ var.value.raw_bucket_name }}"
+            source_base_path: servicenow/change_request/
+            destination_base_path: servicenow/change_request_archived/
+      python_callable_name: inter_bucket_files_transfer
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies:
+        - check_redshift_sync_status
+    
+    update_feed_date:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        domain: change_management
+        load_name: servicenow_change_request
+        feed_date: "{{ params.feed_date }}"
+        run_date: "{{ params.run_date }}"
+      python_callable_name: update_feed_date
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies:
+        - raw_file_mover 
+    
+    update_run_control:
+      operator: airflow.operators.python_operator.PythonOperator
+      job_params:
+        args:
+          --RUN_DATE: "{{ params.run_date }}"
+          --FEED_DATE: "{{ params.feed_date }}" 
+          --LOAD_DETAIL: "{{ params.load_detail }}"
+      python_callable_name: run_audit_runner_job
+      python_callable_file: /usr/local/airflow/dags/utils/common_utils.py
+      dependencies:
+        - update_feed_date
+

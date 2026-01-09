@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+airflow_env/
+*.egg-info/
+dist/
+build/
+
+# Airflow
+airflow.cfg
+logs/
+*.log
+airflow.db
+webserver_config.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables
+.env
+.env.local
+
+# Data files (large files)
+*.csv
+*.parquet
+*.xlsx
+*.xls
+*.json
+*.avro
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Docker
+docker-compose.override.yml
+
+# Secrets
+secrets/
+*.pem
+*.key
+*.crt
+
+# Node modules (if any)
+node_modules/
+
+# Compiled files
+*.class
+*.jar
+*.war
+
+# Local configuration
+config.local.ini
+*.local.yaml
+
+# Test files
+test_*.py
+*_test.py
+
+# Documentation build
+docs/_build/
+site/
+
